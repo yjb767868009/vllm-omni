@@ -44,6 +44,9 @@ from vllm_omni.model_executor.model_loader.weight_utils import (
 
 logger = logging.getLogger(__name__)
 
+CONDITION_IMAGE_SIZE = 384 * 384
+VAE_IMAGE_SIZE = 1024 * 1024
+
 
 def get_qwen_image_edit_pre_process_func(
     od_config: OmniDiffusionConfig,
@@ -91,7 +94,7 @@ def get_qwen_image_edit_pre_process_func(
                 image = cast(PIL.Image.Image | torch.Tensor | np.ndarray, raw_image)
 
             image_size = image.size
-            calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] / image_size[1])
+            calculated_width, calculated_height = calculate_dimensions(VAE_IMAGE_SIZE, image_size[0] / image_size[1])
             height = request.sampling_params.height or calculated_height
             width = request.sampling_params.width or calculated_width
 
@@ -110,14 +113,21 @@ def get_qwen_image_edit_pre_process_func(
             if image is not None and not (
                 isinstance(image, torch.Tensor) and len(image.shape) > 1 and image.shape[1] == latent_channels
             ):
-                image = image_processor.resize(image, calculated_height, calculated_width)
-                prompt_image = image
-                image = image_processor.preprocess(image, calculated_height, calculated_width)
+                image_width, image_height = image.size
+                condition_width, condition_height = calculate_dimensions(
+                    CONDITION_IMAGE_SIZE, image_width / image_height
+                )
+                vae_width, vae_height = calculate_dimensions(VAE_IMAGE_SIZE, image_width / image_height)
+
+                prompt_image = image_processor.resize(image, condition_height, condition_width)
+                image = image_processor.preprocess(image, vae_height, vae_width)
                 image = image.unsqueeze(2)
 
                 # Store preprocessed image and prompt image in request
                 prompt["additional_information"]["preprocessed_image"] = image
                 prompt["additional_information"]["prompt_image"] = prompt_image
+                prompt["additional_information"]["vae_width"] = vae_width
+                prompt["additional_information"]["vae_height"] = vae_height
             request.prompts[i] = prompt
         return request
 
@@ -632,6 +642,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
         first_prompt = req.prompts[0]
         prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
         negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
+        vae_width, vae_height = None, None
         if negative_prompt is None:
             logger.warning(
                 "negative_prompt is not set. The official Qwen-Image-Edit model "
@@ -650,10 +661,12 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             calculated_width = additional_information.get("calculated_width")
             height = req.sampling_params.height
             width = req.sampling_params.width
+            vae_width = additional_information.get("vae_width")
+            vae_height = additional_information.get("vae_height")
         else:
             # fallback to run pre-processing in pipeline (debug only)
             image_size = image[0].size if isinstance(image, list) else image.size
-            calculated_width, calculated_height, _ = calculate_dimensions(1024 * 1024, image_size[0] / image_size[1])
+            calculated_width, calculated_height = calculate_dimensions(VAE_IMAGE_SIZE, image_size[0] / image_size[1])
             height = height or calculated_height
             width = width or calculated_width
 
@@ -662,9 +675,14 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             height = height // multiple_of * multiple_of
 
             if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
-                image = self.image_processor.resize(image, calculated_height, calculated_width)
-                prompt_image = image
-                image = self.image_processor.preprocess(image, calculated_height, calculated_width)
+                image_width, image_height = image.size
+                condition_width, condition_height = calculate_dimensions(
+                    CONDITION_IMAGE_SIZE, image_width / image_height
+                )
+                vae_width, vae_height = calculate_dimensions(VAE_IMAGE_SIZE, image_width / image_height)
+
+                prompt_image = self.image_processor.resize(image, condition_height, condition_width)
+                image = self.image_processor.preprocess(image, vae_height, vae_width)
                 image = image.unsqueeze(2)
 
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
@@ -754,7 +772,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
         img_shapes = [
             [
                 (1, height // self.vae_scale_factor // 2, width // self.vae_scale_factor // 2),
-                (1, calculated_height // self.vae_scale_factor // 2, calculated_width // self.vae_scale_factor // 2),
+                (1, vae_height // self.vae_scale_factor // 2, vae_width // self.vae_scale_factor // 2),
             ]
         ] * batch_size
 
