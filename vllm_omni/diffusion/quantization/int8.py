@@ -3,9 +3,7 @@
 """INT8 quantization config for diffusion transformers."""
 
 from collections.abc import Callable
-
-from typing import Any, Optional
-from typing import TYPE_CHECKING
+from typing import Any, Optional,TYPE_CHECKING
 
 import torch
 import torch_npu
@@ -25,8 +23,8 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
     is_layer_skipped,
 )
 from vllm.model_executor.parameter import (
-    ModelWeightParameter,
     ChannelQuantScaleParameter,
+    ModelWeightParameter,
 )
 from vllm.model_executor.utils import replace_parameter
 
@@ -64,6 +62,7 @@ def create_int8_weight_parameter(
         weight_loader=weight_loader,
     )
 
+
 def create_int8_scale_parameter(
     parameter_type: torch.nn.Parameter,
     output_partition_sizes: list[int],
@@ -77,7 +76,7 @@ def create_int8_scale_parameter(
     """
     if parameter_type == ChannelQuantScaleParameter:
         scale = parameter_type(
-            data=torch.empty((sum(output_partition_sizes),1), dtype = torch.float32),
+            data=torch.empty((sum(output_partition_sizes),1), dtype=torch.float32),
             output_dim=0,
             weight_loader=weight_loader,
         )
@@ -141,7 +140,7 @@ class Int8Config(QuantizationConfig):
             activation_scheme=activation_scheme,
             ignored_layers=ignored_layers,
         )
-    
+
     def get_quant_method(
         self,
         layer: torch.nn.Module,
@@ -249,7 +248,7 @@ class Int8LinearMethod(LinearMethodBase):
             bias=bias,
             pertoken_scale=pertoken_scale,
             output_dtype=ori_dtype,
-            )
+        )
         output = output.reshape(*ori_shape[:-1], -1)
         return output
 
@@ -261,7 +260,7 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
     """
 
     def create_weights(
-        self, 
+        self,
         layer: torch.nn.Module,
         input_size_per_partition: int,
         output_partition_sizes: list[int],
@@ -288,6 +287,7 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
             weight_loader=weight_loader,
         )
         layer.register_parameter("weight", weight)
+
 
     def process_weights_after_loading(self, layer: Module) -> None:
         qweight, weight_scale = torch_npu.npu_dynamic_quant(layer.weight)

@@ -4,6 +4,7 @@
 
 import pytest
 
+
 def test_int8_config_creation():
     """Test that Int8 config can be created."""
     from vllm_omni.diffusion.quantization import get_diffusion_quant_config
@@ -25,6 +26,7 @@ def test_vllm_config_extraction():
     assert vllm_config is not None
     assert vllm_config.activation_scheme == "dynamic"
 
+
 def test_none_quantization():
     """Test that None quantization returns None config."""
     from vllm_omni.diffusion.quantization import (
@@ -45,6 +47,7 @@ def test_invalid_quantization():
     with pytest.raises(ValueError, match="Unknown quantization method"):
         get_diffusion_quant_config("invalid_method")
 
+
 def test_int8_config_with_custom_params():
     """Test Int8 config with custom parameters."""
     from vllm_omni.diffusion.quantization import get_diffusion_quant_config
@@ -57,6 +60,7 @@ def test_int8_config_with_custom_params():
     assert config is not None
     assert config.activation_scheme == "dynamic"
     assert "proj_out" in config.ignored_layers
+
 
 def test_supported_methods():
     """Test that supported methods list is correct."""
