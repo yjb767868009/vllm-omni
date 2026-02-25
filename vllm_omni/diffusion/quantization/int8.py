@@ -137,7 +137,7 @@ class Int8Config(QuantizationConfig):
             self.ignored_layers = hf_to_vllm_mapper.apply_list(self.ignored_layers)
 
     @classmethod
-    def from_config(cls, config: dict[str, Any]) -> Int8Config:
+    def from_config(cls, config: dict[str, Any]) -> "Int8Config":
         quant_method = cls.get_from_keys(config, ["quant_method"])
         is_checkpoint_int8_serialized = "int8" in quant_method
         activation_scheme = cls.get_from_keys(config, ["activation_scheme"])
