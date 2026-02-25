@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from vllm.model_executor.models.utils import WeightsMapper
 
 # Dynamic quantization is supported first.
-ACTIVATION_SCHEMES=["dynamic"]
+ACTIVATION_SCHEMES  = ["dynamic"]
 
 logger = init_logger(__name__)
 
@@ -59,7 +59,7 @@ def create_int8_weight_parameter(
         weight_loader: Callable | None,
 ) -> torch.nn.Parameter:
     """
-        Create int8 weight parameter.
+    Create int8 weight parameter.
     """
     from vllm.model_executor.parameter import ModelWeightParameter
 
@@ -83,7 +83,7 @@ def create_int8_scale_parameter(
         params_dtype: torch.dtype,
 ) -> torch.nn.Parameter:
     """
-        Create scale parameter based on quantization strategy
+    Create scale parameter based on quantization strategy
     """
     if parameter_type == ChannelQuantScaleParameter:
         scale = parameter_type(
@@ -98,7 +98,7 @@ def create_int8_scale_parameter(
 
 class Int8Config(QuantizationConfig):
     """
-        Config class for Int8.
+    Config class for Int8.
     """
     
     def __init__(
@@ -144,7 +144,7 @@ class Int8Config(QuantizationConfig):
         ignored_layers = cls.get_from_keys_or(config, ["ignored_layers"], None)
 
         if not ignored_layers:
-            ignored_layers = cls.get_frm_keys_or(
+            ignored_layers = cls.get_from_keys_or(
                 config, ["modules_to_not_convert"], None
             )
         return cls(
@@ -235,6 +235,11 @@ class Int8LinearMethod(LinearMethodBase):
         )
         layer.register_parameter("weight_scale",scale)
 
+    def process_weights_after_loading(self,layer: Module) -> None:
+        layer.weight.data = layer.weight.data.t().contiguous()
+        layer.weight_scale.data = layer.weight_scale.data.squeeze()
+        layer.weight_offset.data = layer.weight_offset.data.squeeze()
+
     def apply(
             self,
             layer: torch.nn.Module,
@@ -285,7 +290,7 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
             data=torch.empty(
                 output_size_per_partition,
                 input_size_per_partition,
-                dtype = torch.int8,
+                dtype = params_dtype,
             ),
             input_dim = 1,
             output_dim = 0,
@@ -294,21 +299,20 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
         layer.register_parameter("weight", weight)
 
     def process_weights_after_loading(self, layer: Module) -> None:
-        if getattr(layer, "_already_called_process_weights_after_loading", False):
-            return
-        
-        layer.input-scale = None,
         qweight, weight_scale = torch_npu.npu_dynamic_quant(layer.weight)
 
-        weight = qweight.t()
+        layer.weight = None
+        torch.npu.empty_cache()
+
+        weight = qweight.t().contiguous()
 
         # Update layer with new values.
-        replace_parameter(layer, "weight", weight.data)
-        replace_parameter(layer, "weight_scale", weight_scale.data)
+        replace_parameter(layer, "weight", weight)
+        replace_parameter(layer, "weight_scale", weight_scale)
 
 class DiffusionInt8Config(DiffusionQuantizationConfig):
     """
-    Int8 quantization config optimized for diggusion transformers.
+    Int8 quantization config optimized for diffusion transformers.
 
     Args:
         activation_scheme: Activation quantization scheme.
@@ -322,12 +326,12 @@ class DiffusionInt8Config(DiffusionQuantizationConfig):
             activation_scheme: str = "dynamic",
             ignored_layers: list[str] | None = None,
     ):
+        self.activation_scheme=activation_scheme
+        self.ignored_layers=ignored_layers or []
+
         # Create underlying vLLM Int8 config
         self._vllm_config = Int8Config(
-            is_checkpoint_int8_serialized=False,
+            is_checkpoint_int8_serialized=False, # Online quantization
             activation_scheme=activation_scheme,
             ignored_layers=ignored_layers,
         )
-    
-    def get_vllm_quant_config(self) -> QuantizationConfig:
-        return self._vllm_config

@@ -25,12 +25,25 @@ def test_vllm_config_extraction():
     assert vllm_config is not None
     assert vllm_config.activation_scheme == "dynamic"
 
-def test_supported_methods():
-    """Test that supported methods list is correct."""
-    from vllm_omni.diffusion.quantization import SUPPORTED_QUANTIZATION_METHODS
+def test_none_quantization():
+    """Test that None quantization returns None config."""
+    from vllm_omni.diffusion.quantization import (
+        get_diffusion_quant_config,
+        get_vllm_quant_config_for_layers,
+    )
 
-    assert "int8" in SUPPORTED_QUANTIZATION_METHODS
+    config = get_diffusion_quant_config(None)
+    assert config is None
+    vllm_config = get_vllm_quant_config_for_layers(config)
+    assert vllm_config is None
 
+
+def test_invalid_quantization():
+    """Test that invalid quantization method raises error."""
+    from vllm_omni.diffusion.quantization import get_diffusion_quant_config
+
+    with pytest.raises(ValueError, match="Unknown quantization method"):
+        get_diffusion_quant_config("invalid_method")
 
 def test_int8_config_with_custom_params():
     """Test Int8 config with custom parameters."""
@@ -44,6 +57,12 @@ def test_int8_config_with_custom_params():
     assert config is not None
     assert config.activation_scheme == "dynamic"
     assert "proj_out" in config.ignored_layers
+
+def test_supported_methods():
+    """Test that supported methods list is correct."""
+    from vllm_omni.diffusion.quantization import SUPPORTED_QUANTIZATION_METHODS
+
+    assert "int8" in SUPPORTED_QUANTIZATION_METHODS
 
 
 def test_quantization_integration():
