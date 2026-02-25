@@ -117,7 +117,7 @@ def parse_args() -> argparse.Namespace:
         "--quantization",
         type=str,
         default=None,
-        choices=["fp8"],
+        choices=["fp8", "int8"],
         help="Quantization method for the transformer. "
         "Options: 'fp8' (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs). "
         "Default: None (no quantization, uses BF16).",
