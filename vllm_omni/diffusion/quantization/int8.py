@@ -3,7 +3,7 @@
 """INT8 quantization config for diffusion transformers."""
 
 from collections.abc import Callable
-from typing import Any, Optional,TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 import torch_npu
@@ -76,7 +76,7 @@ def create_int8_scale_parameter(
     """
     if parameter_type == ChannelQuantScaleParameter:
         scale = parameter_type(
-            data=torch.empty((sum(output_partition_sizes),1), dtype=torch.float32),
+            data=torch.empty((sum(output_partition_sizes), 1), dtype=torch.float32),
             output_dim=0,
             weight_loader=weight_loader,
         )
@@ -288,7 +288,6 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
         )
         layer.register_parameter("weight", weight)
 
-
     def process_weights_after_loading(self, layer: Module) -> None:
         qweight, weight_scale = torch_npu.npu_dynamic_quant(layer.weight)
 
@@ -300,6 +299,7 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
         # Update layer with new values.
         replace_parameter(layer, "weight", weight)
         replace_parameter(layer, "weight_scale", weight_scale)
+
 
 class DiffusionInt8Config(DiffusionQuantizationConfig):
     """
