@@ -44,7 +44,10 @@ from vllm_omni.model_executor.model_loader.weight_utils import (
 
 logger = logging.getLogger(__name__)
 
+# target pixel area for condition encoder
 CONDITION_IMAGE_SIZE = 384 * 384
+
+# target pixel area for VAE
 VAE_IMAGE_SIZE = 1024 * 1024
 
 
@@ -661,8 +664,8 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             calculated_width = additional_information.get("calculated_width")
             height = req.sampling_params.height
             width = req.sampling_params.width
-            vae_width = additional_information.get("vae_width")
-            vae_height = additional_information.get("vae_height")
+            vae_width = additional_information.get("vae_width") or calculated_width
+            vae_height = additional_information.get("vae_height") or calculated_height
         else:
             # fallback to run pre-processing in pipeline (debug only)
             image_size = image[0].size if isinstance(image, list) else image.size
