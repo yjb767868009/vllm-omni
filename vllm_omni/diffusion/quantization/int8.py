@@ -321,7 +321,7 @@ class DiffusionInt8Config(DiffusionQuantizationConfig):
         ignored_layers: List of layer name patterns to skip quantization.
     """
 
-    def __int__(
+    def __init__(
             self,
             activation_scheme: str = "dynamic",
             ignored_layers: list[str] | None = None,
