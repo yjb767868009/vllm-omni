@@ -235,7 +235,7 @@ class Int8LinearMethod(LinearMethodBase):
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         import torch_npu
-        
+
         ori_shape = x.shape
         ori_dtype = x.dtype
 
@@ -314,6 +314,7 @@ class DiffusionInt8Config(DiffusionQuantizationConfig):
             Format: [block_n, block_k]. If None, uses per-tensor scaling.
         ignored_layers: List of layer name patterns to skip quantization.
     """
+
     quant_config_cls = Int8Config
 
     def __init__(
