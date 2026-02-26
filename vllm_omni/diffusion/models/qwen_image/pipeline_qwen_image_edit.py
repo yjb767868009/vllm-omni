@@ -674,7 +674,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             width = width or calculated_width
             vae_width = calculated_width
             vae_height = calculated_height
-            
+
             multiple_of = self.vae_scale_factor * 2
             width = width // multiple_of * multiple_of
             height = height // multiple_of * multiple_of
