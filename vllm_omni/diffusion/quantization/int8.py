@@ -6,7 +6,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
-import torch_npu
 from torch.nn import Module
 from vllm.logger import init_logger
 from vllm.model_executor.layers.linear import (
@@ -235,6 +234,8 @@ class Int8LinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        import torch_npu
+        
         ori_shape = x.shape
         ori_dtype = x.dtype
 
@@ -289,6 +290,8 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
         layer.register_parameter("weight", weight)
 
     def process_weights_after_loading(self, layer: Module) -> None:
+        import torch_npu
+
         qweight, weight_scale = torch_npu.npu_dynamic_quant(layer.weight)
 
         layer.weight = None
@@ -311,6 +314,7 @@ class DiffusionInt8Config(DiffusionQuantizationConfig):
             Format: [block_n, block_k]. If None, uses per-tensor scaling.
         ignored_layers: List of layer name patterns to skip quantization.
     """
+    quant_config_cls = Int8Config
 
     def __init__(
         self,
