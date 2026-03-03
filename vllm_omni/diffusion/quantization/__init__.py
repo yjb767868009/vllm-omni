@@ -28,8 +28,8 @@ from vllm.logger import init_logger
 
 from .base import DiffusionQuantizationConfig
 from .fp8 import DiffusionFp8Config
-from .int8 import DiffusionInt8Config
 from .gguf import DiffusionGgufConfig
+from .int8 import DiffusionInt8Config
 
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import (
