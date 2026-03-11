@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 from torch.nn import Module
+from vllm import _custom_ops as ops
 from vllm.logger import init_logger
 from vllm.model_executor.layers.linear import (
     LinearBase,
@@ -17,6 +18,9 @@ from vllm.model_executor.layers.quantization import QuantizationMethods
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
     QuantizeMethodBase,
+)
+from vllm.model_executor.layers.quantization.kernels.scaled_mm import (
+    init_int8_linear_kernel,
 )
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     is_layer_skipped,
@@ -48,8 +52,6 @@ def create_int8_weight_parameter(
     """
     Create int8 weight parameter.
     """
-    from vllm.model_executor.parameter import ModelWeightParameter
-
     return ModelWeightParameter(
         data=torch.empty(
             output_size_per_partition,
@@ -154,7 +156,10 @@ class Int8Config(QuantizationConfig):
                 ):
                     return UnquantizedLinearMethod()
                 if not self.is_checkpoint_int8_serialized:
-                    online_method = Int8OnlineLinearMethod(self)
+                    if current_omni_platform.is_cuda():
+                        online_method = Int8OnlineLinearMethod(self)
+                    elif current_omni_platform.is_npu():
+                        online_method = NPUInt8OnlineLinearMethod(self)
                     return online_method
                 else:
                     offline_method = Int8LinearMethod(self)
@@ -164,7 +169,7 @@ class Int8Config(QuantizationConfig):
         return None
 
 
-class Int8LinearMethod(LinearMethodBase):
+class BaseInt8LinearMethod(LinearMethodBase):
     """
     Linear method for Int8
     Supports loading Int8 checkpoints with static weight scale and dynamic activation scale.
@@ -201,32 +206,75 @@ class Int8LinearMethod(LinearMethodBase):
         )
         layer.register_parameter("weight", weight)
 
-        # WEIGHT OFFSET
-        offset = create_int8_scale_parameter(
-            ChannelQuantScaleParameter,
-            output_partition_sizes,
-            input_size_per_partition,
-            None,
-            weight_loader,
-            params_dtype,
-        )
-        layer.register_parameter("weight_offset", offset)
+        if self.quant_config.is_checkpoint_int8_serialized:
+            scale = create_int8_scale_parameter(
+                ChannelQuantScaleParameter,
+                output_partition_sizes,
+                input_size_per_partition,
+                None,
+                weight_loader,
+                params_dtype,
+            )
+            layer.register_parameter("weight_scale", scale)
 
-        # WEIGHT SCALE
-        scale = create_int8_scale_parameter(
-            ChannelQuantScaleParameter,
-            output_partition_sizes,
-            input_size_per_partition,
-            None,
-            weight_loader,
-            params_dtype,
+    def process_weights_after_loading(self, layer: Module) -> None:
+        raise NotImplementedError(f"No BaseInt8LinearMethod process_weights_after_loading implementation.")
+
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        bias: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        raise NotImplementedError(f"No BaseInt8LinearMethod apply implementation.")
+
+
+class Int8LinearMethod(BaseInt8LinearMethod):
+    """
+    Linear method for Int8
+    Supports loading Int8 checkpoints.
+
+    Args:
+        quant_config: The quantization config.
+    """
+
+    def __init__(self, quant_config: Int8Config):
+        super().__init__(quant_config)
+
+        self.int8_linear = init_int8_linear_kernel(
+            is_channelwise=False,
+            is_static_input_scheme=False,
+            input_symmetric=True,
+            module_name=self.__class__.__name__,
         )
-        layer.register_parameter("weight_scale", scale)
+
+    def process_weights_after_loading(self, layer: Module) -> None:
+        self.int8_linear.process_weights_after_loading(layer)
+
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        bias: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.int8_linear.apply_weights(layer, x, bias)
+
+
+class NPUInt8LinearMethod(BaseInt8LinearMethod):
+    """
+    NPU Linear method for Int8
+    Supports loading Int8 checkpoints.
+
+    Args:
+        quant_config: The quantization config.
+    """
+
+    def __init__(self, quant_config: Int8Config):
+        super().__init__(quant_config)
 
     def process_weights_after_loading(self, layer: Module) -> None:
         layer.weight.data = layer.weight.data.t().contiguous()
         layer.weight_scale.data = layer.weight_scale.data.squeeze()
-        layer.weight_offset.data = layer.weight_offset.data.squeeze()
 
     def apply(
         self,
@@ -260,47 +308,34 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
     and quantized the weights during loading.
     """
 
-    def create_weights(
-        self,
-        layer: torch.nn.Module,
-        input_size_per_partition: int,
-        output_partition_sizes: list[int],
-        input_size: int,
-        output_size: int,
-        params_dtype: torch.dtype,
-        **extra_weight_attrs,
-    ):
-        output_size_per_partition = sum(output_partition_sizes)
-        weight_loader = extra_weight_attrs.get("weight_loader")
-        layer.logical_widths = output_partition_sizes
-        layer.input_size_per_partition = input_size_per_partition
-        layer.output_size_per_partition = output_size_per_partition
-        layer.orig_dtype = params_dtype
+    def process_weights_after_loading(self, layer: Module) -> None:
+        qweight, weight_scale = ops.scaled_int8_quant(layer.weight, scale=None)
+        weight = qweight.t()
 
-        weight = ModelWeightParameter(
-            data=torch.empty(
-                output_size_per_partition,
-                input_size_per_partition,
-                dtype=params_dtype,
-            ),
-            input_dim=1,
-            output_dim=0,
-            weight_loader=weight_loader,
-        )
-        layer.register_parameter("weight", weight)
+        # Update layer with new values.
+        replace_parameter(layer, "weight", weight)
+        replace_parameter(layer, "weight_scale", weight_scale)
+
+
+class NPUInt8OnlineLinearMethod(NPUInt8LinearMethod):
+    """
+    NPU Online version of Int8LinearMethod, loads the fp16/bf16 checkpoint
+    and quantized the weights during loading.
+    """
 
     def process_weights_after_loading(self, layer: Module) -> None:
         import torch_npu
 
-        qweight, weight_scale = torch_npu.npu_dynamic_quant(layer.weight)
+        weight = layer.weight
+        qweight, weight_scale = torch_npu.npu_dynamic_quant(weight)
 
-        layer.weight = None
+        del weight
         torch.npu.empty_cache()
 
-        weight = qweight.t().contiguous()
+        qweight = qweight.t().contiguous()
 
         # Update layer with new values.
-        replace_parameter(layer, "weight", weight)
+        replace_parameter(layer, "weight", qweight)
         replace_parameter(layer, "weight_scale", weight_scale)
 
 

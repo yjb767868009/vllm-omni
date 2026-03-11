@@ -16,7 +16,7 @@ Both methods can provide significant speedups (typically **1.5x-2.0x**) while ma
 
 vLLM-Omni also supports quantization methods:
 
-3. **[Quantization](diffusion/quantization/overview.md)** - Reduces DiT linear layers from BF16 to FP8 or Int8 (for NPU), providing ~1.28x speedup with minimal quality loss. Supports per-layer skip for sensitive layers.
+3. **[Quantization](diffusion/quantization/overview.md)** - Reduces DiT linear layers from BF16 to FP8 or Int8, providing ~1.28x speedup with minimal quality loss. Supports per-layer skip for sensitive layers.
 
 vLLM-Omni also supports parallelism methods for diffusion models, including:
 
@@ -46,7 +46,7 @@ vLLM-Omni also supports parallelism methods for diffusion models, including:
 | Method | Configuration | Description | Best For |
 |--------|--------------|-------------|----------|
 | **FP8** | `quantization="fp8"` | FP8 W8A8 on Ada/Hopper, weight-only on older GPUs | Memory reduction, inference speedup |
-| **Int8** | `quantization="int8"` | Int8 W8A8 on NPUs | Memory reduction, inference speedup |
+| **Int8** | `quantization="int8"` | Int8 W8A8 | Memory reduction, inference speedup |
 
 ## Supported Models
 
@@ -335,7 +335,7 @@ outputs = omni.generate(
 )
 ```
 
-### Using Int8 Quantization(only for NPU)
+### Using Int8 Quantization
 
 ```python
 from vllm_omni import Omni
