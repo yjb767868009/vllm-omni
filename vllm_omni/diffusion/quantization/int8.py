@@ -218,7 +218,7 @@ class BaseInt8LinearMethod(LinearMethodBase):
             layer.register_parameter("weight_scale", scale)
 
     def process_weights_after_loading(self, layer: Module) -> None:
-        raise NotImplementedError(f"No BaseInt8LinearMethod process_weights_after_loading implementation.")
+        raise NotImplementedError("No BaseInt8LinearMethod process_weights_after_loading implementation.")
 
     def apply(
         self,
@@ -226,7 +226,7 @@ class BaseInt8LinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        raise NotImplementedError(f"No BaseInt8LinearMethod apply implementation.")
+        raise NotImplementedError("No BaseInt8LinearMethod apply implementation.")
 
 
 class Int8LinearMethod(BaseInt8LinearMethod):
