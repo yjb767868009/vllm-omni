@@ -167,7 +167,7 @@ class Int8Config(QuantizationConfig):
                 elif current_omni_platform.is_npu():
                     online_method = NPUInt8OnlineLinearMethod(self)
                 else:
-                    logger.warning("The current platform is not supported.")
+                    raise NotImplementedError("The current platform is not supported int8 online quant.")
                 return online_method
             else:
                 if current_omni_platform.is_cuda():
@@ -175,7 +175,7 @@ class Int8Config(QuantizationConfig):
                 elif current_omni_platform.is_npu():
                     online_method = NPUInt8LinearMethod(self)
                 else:
-                    logger.warning("The current platform is not supported.")
+                    raise NotImplementedError("The current platform is not supported int8 offline quant.")
                 return offline_method
         return None
 
