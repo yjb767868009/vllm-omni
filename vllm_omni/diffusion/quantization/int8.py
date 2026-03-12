@@ -6,6 +6,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
+
+try:
+    import torch_npu
+except (ImportError, ModuleNotFoundError):
+    torch_npu = None
+
 from torch.nn import Module
 from vllm import _custom_ops as ops
 from vllm.logger import init_logger
@@ -44,10 +50,11 @@ ACTIVATION_SCHEMES = ["dynamic"]
 logger = init_logger(__name__)
 
 
-def create_int8_weight_parameter(
+def create_weight_parameter(
     output_size_per_partition: int,
     input_size_per_partition: int,
     weight_loader: Callable | None,
+    params_dtype: torch.dtype,
 ) -> torch.nn.Parameter:
     """
     Create int8 weight parameter.
@@ -56,7 +63,7 @@ def create_int8_weight_parameter(
         data=torch.empty(
             output_size_per_partition,
             input_size_per_partition,
-            dtype=torch.int8,
+            dtype=params_dtype,
         ),
         input_dim=1,
         output_dim=0,
@@ -147,25 +154,29 @@ class Int8Config(QuantizationConfig):
         layer: torch.nn.Module,
         prefix: str,
     ) -> Optional["QuantizeMethodBase"]:
-        if current_omni_platform.is_npu():
-            if isinstance(layer, LinearBase):
-                if is_layer_skipped(
-                    prefix=prefix,
-                    ignored_layers=self.ignored_layers,
-                    fused_mapping=self.packed_modules_mapping,
-                ):
-                    return UnquantizedLinearMethod()
-                if not self.is_checkpoint_int8_serialized:
-                    if current_omni_platform.is_cuda():
-                        online_method = Int8OnlineLinearMethod(self)
-                    elif current_omni_platform.is_npu():
-                        online_method = NPUInt8OnlineLinearMethod(self)
-                    return online_method
+        if isinstance(layer, LinearBase):
+            if is_layer_skipped(
+                prefix=prefix,
+                ignored_layers=self.ignored_layers,
+                fused_mapping=self.packed_modules_mapping,
+            ):
+                return UnquantizedLinearMethod()
+            if not self.is_checkpoint_int8_serialized:
+                if current_omni_platform.is_cuda():
+                    online_method = Int8OnlineLinearMethod(self)
+                elif current_omni_platform.is_npu():
+                    online_method = NPUInt8OnlineLinearMethod(self)
                 else:
+                    logger.warning("The current platform is not supported.")
+                return online_method
+            else:
+                if current_omni_platform.is_cuda():
                     offline_method = Int8LinearMethod(self)
-                    return offline_method
-        else:
-            logger.warning("The current platform is not supported.")
+                elif current_omni_platform.is_npu():
+                    online_method = NPUInt8LinearMethod(self)
+                else:
+                    logger.warning("The current platform is not supported.")
+                return offline_method
         return None
 
 
@@ -199,10 +210,12 @@ class BaseInt8LinearMethod(LinearMethodBase):
         layer.output_size_per_partition = output_size_per_partition
         layer.orig_dtype = params_dtype
 
-        weight = create_int8_weight_parameter(
+        params_dtype = torch.int8 if self.quant_config.is_checkpoint_int8_serialized else params_dtype
+        weight = create_weight_parameter(
             output_size_per_partition=output_size_per_partition,
             input_size_per_partition=input_size_per_partition,
             weight_loader=weight_loader,
+            params_dtype=params_dtype,
         )
         layer.register_parameter("weight", weight)
 
@@ -282,8 +295,6 @@ class NPUInt8LinearMethod(BaseInt8LinearMethod):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        import torch_npu
-
         ori_shape = x.shape
         ori_dtype = x.dtype
 
@@ -309,7 +320,7 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
     """
 
     def process_weights_after_loading(self, layer: Module) -> None:
-        qweight, weight_scale = ops.scaled_int8_quant(layer.weight, scale=None)
+        qweight, weight_scale, _ = ops.scaled_int8_quant(layer.weight, scale=None)
         weight = qweight.t()
 
         # Update layer with new values.
@@ -324,8 +335,6 @@ class NPUInt8OnlineLinearMethod(NPUInt8LinearMethod):
     """
 
     def process_weights_after_loading(self, layer: Module) -> None:
-        import torch_npu
-
         weight = layer.weight
         qweight, weight_scale = torch_npu.npu_dynamic_quant(weight)
 
