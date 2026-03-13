@@ -134,7 +134,7 @@ def test_get_quant_method(mocker: MockerFixture):
     # Mock the platform to be GPU
     with (
         patch("vllm_omni.platforms.current_omni_platform.is_cuda", return_value=True),
-        patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=False)
+        patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=False),
     ):
         method = vllm_config.get_quant_method(layer, prefix)
         assert isinstance(method, Int8OnlineLinearMethod)
@@ -158,7 +158,7 @@ def test_get_npu_quant_method():
     # Mock the platform to be NPU
     with (
         patch("vllm_omni.platforms.current_omni_platform.is_cuda", return_value=False),
-        patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=True)
+        patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=True),
     ):
         method = vllm_config.get_quant_method(layer, prefix)
         assert isinstance(method, NPUInt8OnlineLinearMethod)
