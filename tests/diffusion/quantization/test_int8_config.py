@@ -132,7 +132,8 @@ def test_get_quant_method(mocker: MockerFixture):
     prefix = "test_layer"
 
     # Mock the platform to be GPU
-    with patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=False):
+    with (patch("vllm_omni.platforms.current_omni_platform.is_cuda", return_value=True),
+          patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=False)):
         method = vllm_config.get_quant_method(layer, prefix)
         assert isinstance(method, Int8OnlineLinearMethod)
 
@@ -152,8 +153,9 @@ def test_get_npu_quant_method():
     layer = MagicMock(spec=LinearBase)
     prefix = "test_layer"
 
-    # Mock the platform to be GPU
-    with patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=True):
+    # Mock the platform to be NPU
+    with (patch("vllm_omni.platforms.current_omni_platform.is_cuda", return_value=False),
+          patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=True)):
         method = vllm_config.get_quant_method(layer, prefix)
         assert isinstance(method, NPUInt8OnlineLinearMethod)
 
@@ -225,12 +227,13 @@ class TestInt8OnlineLinearMethod:
     def mock_deps(self, mocker):
         # mock kernel
         mock_kernel = mocker.Mock()
+        mock_kernel.layer_param_names = ("weight", "weight_scale", "input_scale", "input_zero_point", "azp_adj")
         mocker.patch("vllm_omni.diffusion.quantization.int8.init_int8_linear_kernel", return_value=mock_kernel)
         mocker.patch("vllm_omni.diffusion.quantization.int8.replace_parameter")
 
         # mock scaled_int8_quant return value
         mock_qweight = torch.ones((128, 64), dtype=torch.int8)
-        mock_scale = torch.tensor([0.5])
+        mock_scale = torch.randn(128)
         mock_quant = mocker.patch(
             "vllm_omni.diffusion.quantization.int8.ops.scaled_int8_quant", return_value=(mock_qweight, mock_scale, None)
         )
@@ -244,3 +247,61 @@ class TestInt8OnlineLinearMethod:
         layer.weight = Parameter(torch.randn(128, 64))
         method.process_weights_after_loading(layer)
         mock_deps["quant"].assert_called_once_with(layer.weight, scale=None)
+
+
+class TestNPUInt8LinearMethod:
+    qweight_mock = torch.randn((128,64)).to(dtype=torch.int8)
+    scale_mock = torch.randn(128)
+    out_mock = torch.randn((16,128))
+
+    @pytest.fixture
+    def mock_torch_npu(self, mocker):
+        torch_npu = MagicMock()
+
+        mocker.patch("vllm_omni.diffusion.quantization.int8.torch_npu",
+                     return_value=torch_npu)
+        mocker.patch("vllm_omni.diffusion.quantization.int8.torch_npu.npu_dynamic_quant",
+                     return_value=(self.qweight_mock, self.scale_mock))
+        mocker.patch("vllm_omni.diffusion.quantization.int8.torch_npu.npu_quant_matmul",
+                     return_value=self.out_mock)
+        return torch_npu
+
+    @pytest.fixture
+    def mock_quant_config(self, mocker):
+        return mocker.Mock()
+
+    @pytest.fixture
+    def mock_layer(self, mocker):
+        layer = torch.nn.Module()
+        layer.weight = torch.nn.Parameter(self.qweight_mock, requires_grad=False)
+        layer.weight_scale = torch.nn.Parameter(self.scale_mock, requires_grad=False)
+        return layer
+
+    def test_npu_int8_process_weights_after_loading(self, mock_layer, mock_quant_config, mock_torch_npu):
+        from vllm_omni.diffusion.quantization.int8 import NPUInt8LinearMethod
+
+        method = NPUInt8LinearMethod(mock_quant_config)
+        ori_weight_shape = mock_layer.weight.shape
+
+        method.process_weights_after_loading(mock_layer)
+
+        assert mock_layer.weight.shape == ori_weight_shape[::-1]
+        assert mock_layer.weight.is_contiguous()
+
+    def test_npu_int8_apply(self, mock_layer, mock_quant_config, mock_torch_npu):
+        from vllm_omni.diffusion.quantization.int8 import NPUInt8LinearMethod
+
+        method = NPUInt8LinearMethod(mock_quant_config)
+        x = torch.randn(1, 16, 64)
+
+        output = method.apply(mock_layer, x)
+        assert output.shape == (1, 16, 128)
+
+    def test_npu_int8_online_process_weights(self, mock_layer, mock_quant_config, mock_torch_npu):
+        from vllm_omni.diffusion.quantization.int8 import NPUInt8OnlineLinearMethod
+
+        method = NPUInt8OnlineLinearMethod(mock_quant_config)
+        method.process_weights_after_loading(mock_layer)
+
+        assert mock_layer.weight.shape == (64, 128)
+        assert torch.equal(mock_layer.weight_scale, self.scale_mock)

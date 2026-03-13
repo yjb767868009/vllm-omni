@@ -71,29 +71,6 @@ def create_weight_parameter(
     )
 
 
-def create_int8_scale_parameter(
-    parameter_type: torch.nn.Parameter,
-    output_partition_sizes: list[int],
-    input_size_per_partition: int,
-    block_size: list[int] | None,
-    weight_loader: Callable | None,
-    params_dtype: torch.dtype,
-) -> torch.nn.Parameter:
-    """
-    Create scale parameter based on quantization strategy
-    """
-    if parameter_type == ChannelQuantScaleParameter:
-        scale = parameter_type(
-            data=torch.empty((sum(output_partition_sizes), 1), dtype=torch.float32),
-            output_dim=0,
-            weight_loader=weight_loader,
-        )
-    else:
-        raise ValueError(f"Unknown parameter type: {parameter_type}")
-
-    return scale
-
-
 class Int8Config(QuantizationConfig):
     """
     Config class for Int8.
@@ -124,7 +101,8 @@ class Int8Config(QuantizationConfig):
 
     @classmethod
     def get_min_capability(cls) -> int:
-        return 75
+        # Have verified on A100 and H20, but not on oldest versions.
+        return 80
 
     @classmethod
     def get_config_filenames(cls) -> list[str]:
@@ -138,7 +116,7 @@ class Int8Config(QuantizationConfig):
     def from_config(cls, config: dict[str, Any]) -> "Int8Config":
         quant_method = cls.get_from_keys(config, ["quant_method"])
         is_checkpoint_int8_serialized = "int8" in quant_method
-        activation_scheme = cls.get_from_keys(config, ["activation_scheme"])
+        activation_scheme = cls.get_from_keys(config, ["activation_scheme"], "dynamic")
         ignored_layers = cls.get_from_keys_or(config, ["ignored_layers"], None)
 
         if not ignored_layers:
@@ -173,7 +151,7 @@ class Int8Config(QuantizationConfig):
                 if current_omni_platform.is_cuda():
                     offline_method = Int8LinearMethod(self)
                 elif current_omni_platform.is_npu():
-                    online_method = NPUInt8LinearMethod(self)
+                    offline_method = NPUInt8LinearMethod(self)
                 else:
                     raise NotImplementedError("The current platform is not supported int8 offline quant.")
                 return offline_method
@@ -220,13 +198,10 @@ class BaseInt8LinearMethod(LinearMethodBase):
         layer.register_parameter("weight", weight)
 
         if self.quant_config.is_checkpoint_int8_serialized:
-            scale = create_int8_scale_parameter(
-                ChannelQuantScaleParameter,
-                output_partition_sizes,
-                input_size_per_partition,
-                None,
-                weight_loader,
-                params_dtype,
+            scale = ChannelQuantScaleParameter(
+                data=torch.empty((sum(output_partition_sizes), 1), dtype=torch.float32),
+                output_dim=0,
+                weight_loader=weight_loader,
             )
             layer.register_parameter("weight_scale", scale)
 
@@ -320,13 +295,24 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
     """
 
     def process_weights_after_loading(self, layer: Module) -> None:
+        w_q_name, w_s_name, i_s_name, i_zp_name, azp_adj_name = self.int8_linear.layer_param_names
         qweight, weight_scale, _ = ops.scaled_int8_quant(layer.weight, scale=None)
-        weight = qweight.t()
 
         # Update layer with new values.
-        replace_parameter(layer, "weight", weight)
-        replace_parameter(layer, "weight_scale", weight_scale)
+        replace_parameter(
+            layer,
+            w_q_name,
+            torch.nn.Parameter(qweight.t().data, requires_grad=False)
+        )
+        replace_parameter(
+            layer,
+            w_s_name,
+            torch.nn.Parameter(weight_scale.data, requires_grad=False)
+        )
 
+        setattr(layer, i_s_name, None)
+        setattr(layer, i_zp_name, None)
+        setattr(layer, azp_adj_name, None)
 
 class NPUInt8OnlineLinearMethod(NPUInt8LinearMethod):
     """
@@ -337,9 +323,6 @@ class NPUInt8OnlineLinearMethod(NPUInt8LinearMethod):
     def process_weights_after_loading(self, layer: Module) -> None:
         weight = layer.weight
         qweight, weight_scale = torch_npu.npu_dynamic_quant(weight)
-
-        del weight
-        torch.npu.empty_cache()
 
         qweight = qweight.t().contiguous()
 
@@ -355,7 +338,6 @@ class DiffusionInt8Config(DiffusionQuantizationConfig):
     Args:
         activation_scheme: Activation quantization scheme.
             - "dynamic": Per-token dynamic scaling (default, no calibration)
-            Format: [block_n, block_k]. If None, uses per-tensor scaling.
         ignored_layers: List of layer name patterns to skip quantization.
     """
 
