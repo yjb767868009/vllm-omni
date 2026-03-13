@@ -132,8 +132,10 @@ def test_get_quant_method(mocker: MockerFixture):
     prefix = "test_layer"
 
     # Mock the platform to be GPU
-    with (patch("vllm_omni.platforms.current_omni_platform.is_cuda", return_value=True),
-          patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=False)):
+    with (
+        patch("vllm_omni.platforms.current_omni_platform.is_cuda", return_value=True),
+        patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=False)
+    ):
         method = vllm_config.get_quant_method(layer, prefix)
         assert isinstance(method, Int8OnlineLinearMethod)
 
@@ -154,8 +156,10 @@ def test_get_npu_quant_method():
     prefix = "test_layer"
 
     # Mock the platform to be NPU
-    with (patch("vllm_omni.platforms.current_omni_platform.is_cuda", return_value=False),
-          patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=True)):
+    with (
+        patch("vllm_omni.platforms.current_omni_platform.is_cuda", return_value=False),
+        patch("vllm_omni.platforms.current_omni_platform.is_npu", return_value=True)
+    ):
         method = vllm_config.get_quant_method(layer, prefix)
         assert isinstance(method, NPUInt8OnlineLinearMethod)
 
@@ -250,20 +254,20 @@ class TestInt8OnlineLinearMethod:
 
 
 class TestNPUInt8LinearMethod:
-    qweight_mock = torch.randn((128,64)).to(dtype=torch.int8)
+    qweight_mock = torch.randn((128, 64)).to(dtype=torch.int8)
     scale_mock = torch.randn(128)
-    out_mock = torch.randn((16,128))
+    out_mock = torch.randn((16, 128))
 
     @pytest.fixture
     def mock_torch_npu(self, mocker):
         torch_npu = MagicMock()
 
-        mocker.patch("vllm_omni.diffusion.quantization.int8.torch_npu",
-                     return_value=torch_npu)
-        mocker.patch("vllm_omni.diffusion.quantization.int8.torch_npu.npu_dynamic_quant",
-                     return_value=(self.qweight_mock, self.scale_mock))
-        mocker.patch("vllm_omni.diffusion.quantization.int8.torch_npu.npu_quant_matmul",
-                     return_value=self.out_mock)
+        mocker.patch("vllm_omni.diffusion.quantization.int8.torch_npu", return_value=torch_npu)
+        mocker.patch(
+            "vllm_omni.diffusion.quantization.int8.torch_npu.npu_dynamic_quant",
+            return_value=(self.qweight_mock, self.scale_mock),
+        )
+        mocker.patch("vllm_omni.diffusion.quantization.int8.torch_npu.npu_quant_matmul", return_value=self.out_mock)
         return torch_npu
 
     @pytest.fixture

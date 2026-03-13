@@ -299,20 +299,13 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
         qweight, weight_scale, _ = ops.scaled_int8_quant(layer.weight, scale=None)
 
         # Update layer with new values.
-        replace_parameter(
-            layer,
-            w_q_name,
-            torch.nn.Parameter(qweight.t().data, requires_grad=False)
-        )
-        replace_parameter(
-            layer,
-            w_s_name,
-            torch.nn.Parameter(weight_scale.data, requires_grad=False)
-        )
+        replace_parameter(layer, w_q_name, torch.nn.Parameter(qweight.t().data, requires_grad=False))
+        replace_parameter(layer, w_s_name, torch.nn.Parameter(weight_scale.data, requires_grad=False))
 
         setattr(layer, i_s_name, None)
         setattr(layer, i_zp_name, None)
         setattr(layer, azp_adj_name, None)
+
 
 class NPUInt8OnlineLinearMethod(NPUInt8LinearMethod):
     """
