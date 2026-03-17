@@ -6,12 +6,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
-
-if current_omni_platform.is_npu():
-    import torch_npu
-else:
-    torch_npu = None
-
 from torch.nn import Module
 from torch.utils._python_dispatch import TorchDispatchMode
 from vllm import _custom_ops as ops
@@ -44,6 +38,11 @@ from vllm.model_executor.parameter import (
 from vllm.model_executor.utils import replace_parameter, set_weight_attrs
 
 from vllm_omni.platforms import current_omni_platform
+
+if current_omni_platform.is_npu():
+    import torch_npu
+else:
+    torch_npu = None
 
 from .base import DiffusionQuantizationConfig
 
