@@ -22,7 +22,7 @@ npu_available = pytest.mark.skipif(
 )
 
 cuda_available = pytest.mark.skipif(
-    not current_omni_platform.is_npu(),
+    not current_omni_platform.is_cuda(),
     reason="GPU platform not available."
 )
 
