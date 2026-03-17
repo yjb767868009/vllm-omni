@@ -20,10 +20,7 @@ from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
     QuantizeMethodBase,
 )
-from vllm.model_executor.layers.quantization.fp8 import (
-    CopyNumelCounter,
-    _copy_missing_attrs
-)
+from vllm.model_executor.layers.quantization.fp8 import CopyNumelCounter, _copy_missing_attrs
 from vllm.model_executor.layers.quantization.kernels.scaled_mm import (
     init_int8_linear_kernel,
 )
@@ -35,7 +32,7 @@ from vllm.model_executor.parameter import (
     ChannelQuantScaleParameter,
     ModelWeightParameter,
 )
-from vllm.model_executor.utils import replace_parameter, set_weight_attrs
+from vllm.model_executor.utils import replace_parameter
 
 from vllm_omni.platforms import current_omni_platform
 
@@ -221,11 +218,13 @@ class BaseInt8LinearMethod(LinearMethodBase):
     ) -> torch.Tensor:
         raise NotImplementedError("No BaseInt8LinearMethod apply implementation.")
 
+
 class LazyWeightMixin:
     """
     Mixin for lazy weight loading with meta device.
     weighs are created on meta device and materialized just-in-time during loadding.
     """
+
     uses_meta_device: bool = True
 
     def create_weights(
@@ -388,7 +387,7 @@ class Int8OnlineLinearMethod(LazyWeightMixin, Int8LinearMethod):
     def process_weights_after_loading(self, layer: Module) -> None:
         if getattr(layer, "_already_called_process_weights_after_loading", False):
             return
-        
+
         if layer.weight.device == torch.device("meta"):
             weight = ModelWeightParameter(
                 data=torch.empty_like(layer.weight, device=layer._load_device),
@@ -424,7 +423,7 @@ class NPUInt8OnlineLinearMethod(LazyWeightMixin, NPUInt8LinearMethod):
     def process_weights_after_loading(self, layer: Module) -> None:
         if getattr(layer, "_already_called_process_weights_after_loading", False):
             return
-        
+
         if layer.weight.device == torch.device("meta"):
             weight = ModelWeightParameter(
                 data=torch.empty_like(layer.weight, device=layer._load_device),

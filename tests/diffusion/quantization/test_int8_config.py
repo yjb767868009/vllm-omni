@@ -16,15 +16,9 @@ from vllm_omni.diffusion.quantization import (
 )
 from vllm_omni.platforms import current_omni_platform
 
-npu_available = pytest.mark.skipif(
-    not current_omni_platform.is_npu(),
-    reason="NPU platform not available."
-)
+npu_available = pytest.mark.skipif(not current_omni_platform.is_npu(), reason="NPU platform not available.")
 
-cuda_available = pytest.mark.skipif(
-    not current_omni_platform.is_cuda(),
-    reason="GPU platform not available."
-)
+cuda_available = pytest.mark.skipif(not current_omni_platform.is_cuda(), reason="GPU platform not available.")
 
 
 def test_int8_config_creation():
@@ -321,6 +315,7 @@ class TestNPUInt8LinearMethod:
         assert mock_layer.weight.shape == (64, 128)
         assert torch.equal(mock_layer.weight_scale, self.scale_mock)
 
+
 @pytest.fixture
 def quant_config():
     """Shared quant config fixture for smoke tests."""
@@ -330,6 +325,7 @@ def quant_config():
         is_checkpoint_int8_serialized=False,
         activation_scheme="dynamic",
     )
+
 
 @npu_available
 class TestNPUInt8Smoke:
@@ -353,10 +349,6 @@ class TestNPUInt8Smoke:
         """Smoke test: verify npu_dynamic_quant returns correct shapes."""
         import torch_npu
 
-        from vllm_omni.diffusion.quantization.int8 import NPUInt8OnlineLinearMethod
-
-        method = NPUInt8OnlineLinearMethod(quant_config)
-
         # Call real torch_npu.npu_dynamic_quant
         weight = real_layer.weight
         qweight, scale = torch_npu.npu_dynamic_quant(weight)
@@ -365,9 +357,7 @@ class TestNPUInt8Smoke:
         assert qweight.dtype == torch.int8
         assert scale.shape == (weight.shape[0],)
 
-    def test_real_npu_online_process_weights_after_loading(
-        self, quant_config, real_layer
-    ):
+    def test_real_npu_online_process_weights_after_loading(self, quant_config, real_layer):
         """Smoke test: full process_weights_after_loading with real torch_npu."""
         from vllm_omni.diffusion.quantization.int8 import NPUInt8OnlineLinearMethod
 
@@ -432,9 +422,7 @@ class TestCudaInt8Smoke:
         assert qweight.dtype == torch.int8
         assert scale.shape == (weight.shape[0], 1)
 
-    def test_real_cuda_online_process_weights_after_loading(
-        self, quant_config, real_layer
-    ):
+    def test_real_cuda_online_process_weights_after_loading(self, quant_config, real_layer):
         """Smoke test: full process_weights_after_loading with real CUDA ops."""
         from vllm_omni.diffusion.quantization.int8 import Int8OnlineLinearMethod
 
@@ -449,6 +437,7 @@ class TestCudaInt8Smoke:
     def test_real_cuda_int8_apply_forward(self, quant_config):
         """Smoke test: forward pass with real CUDA int8 kernel."""
         from vllm import _custom_ops as ops
+
         from vllm_omni.diffusion.quantization.int8 import Int8LinearMethod
 
         method = Int8LinearMethod(quant_config)
