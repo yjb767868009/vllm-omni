@@ -7,12 +7,13 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 
-try:
+if current_omni_platform.is_npu():
     import torch_npu
-except (ImportError, ModuleNotFoundError):
+else:
     torch_npu = None
 
 from torch.nn import Module
+from torch.utils._python_dispatch import TorchDispatchMode
 from vllm import _custom_ops as ops
 from vllm.logger import init_logger
 from vllm.model_executor.layers.linear import (
@@ -25,17 +26,22 @@ from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
     QuantizeMethodBase,
 )
+from vllm.model_executor.layers.quantization.fp8 import (
+    CopyNumelCounter,
+    _copy_missing_attrs
+)
 from vllm.model_executor.layers.quantization.kernels.scaled_mm import (
     init_int8_linear_kernel,
 )
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     is_layer_skipped,
 )
+from vllm.model_executor.model_loader.weight_utils import initialize_single_dummy_weight
 from vllm.model_executor.parameter import (
     ChannelQuantScaleParameter,
     ModelWeightParameter,
 )
-from vllm.model_executor.utils import replace_parameter
+from vllm.model_executor.utils import replace_parameter, set_weight_attrs
 
 from vllm_omni.platforms import current_omni_platform
 
@@ -116,7 +122,7 @@ class Int8Config(QuantizationConfig):
     def from_config(cls, config: dict[str, Any]) -> "Int8Config":
         quant_method = cls.get_from_keys(config, ["quant_method"])
         is_checkpoint_int8_serialized = "int8" in quant_method
-        activation_scheme = cls.get_from_keys(config, ["activation_scheme"], "dynamic")
+        activation_scheme = cls.get_from_keys_or(config, ["activation_scheme"], "dynamic")
         ignored_layers = cls.get_from_keys_or(config, ["ignored_layers"], None)
 
         if not ignored_layers:
@@ -216,6 +222,92 @@ class BaseInt8LinearMethod(LinearMethodBase):
     ) -> torch.Tensor:
         raise NotImplementedError("No BaseInt8LinearMethod apply implementation.")
 
+class LazyWeightMixin:
+    """
+    Mixin for lazy weight loading with meta device.
+    weighs are created on meta device and materialized just-in-time during loadding.
+    """
+    uses_meta_device: bool = True
+
+    def create_weights(
+        self,
+        layer: torch.nn.Module,
+        input_size_per_partition: int,
+        output_partition_sizes: list[int],
+        input_size: int,
+        output_size: int,
+        params_dtype: torch.dtype,
+        **extra_weight_attrs,
+    ):
+        output_size_per_partition = sum(output_partition_sizes)
+        weight_loader = extra_weight_attrs.get("weight_loader")
+        layer.logical_widths = output_partition_sizes
+        layer.input_size_per_partition = input_size_per_partition
+        layer.output_size_per_partition = output_size_per_partition
+        layer.orig_dtype = params_dtype
+        layer.weight_block_size = None
+
+        # WEIGHT
+        def patched_weight_loader(param, loaded_weight, *args, **kwargs):
+            # track how many elements we have updated
+            if not hasattr(layer, "_loaded_numel"):
+                layer._loaded_numel = 0
+
+                # when the first `loaded_weight` is about to be
+                # loaded to `param`, materialize `param` just-in-time
+                weight = ModelWeightParameter(
+                    data=torch.empty_like(layer.weight, device=layer._load_device),
+                    input_dim=1,
+                    output_dim=0,
+                    weight_loader=patched_weight_loader,
+                )
+                _copy_missing_attrs(layer.weight, weight)
+                layer.register_parameter("weight", weight)
+                del layer._load_device
+
+            # refresh the reference to `param` to reflect just-in-time
+            # materialization
+            param = layer.weight
+
+            # load the current weight chunk
+            copy_numel_counter = CopyNumelCounter()
+            with copy_numel_counter:
+                res = weight_loader(param, loaded_weight, *args, **kwargs)  # type: ignore[misc]
+            layer._loaded_numel += copy_numel_counter.copied_numel
+
+            # if we have loaded all of the elements, call
+            # process_weights_after_loading
+            target_loaded_numel = layer.weight.numel()
+            if layer._loaded_numel == target_loaded_numel:
+                self.process_weights_after_loading(layer)
+
+                # Prevent the usual `process_weights_after_loading` call from doing
+                # anything
+                layer._already_called_process_weights_after_loading = True
+
+                # Note that we keep `layer._loaded_numel` around just in case
+                # there is logic added to vllm in the future which calls a
+                # weight loader twice - we do not want to re-initialize in
+                # that case.
+
+            return res
+
+        weight = ModelWeightParameter(
+            data=torch.empty(
+                output_size_per_partition,
+                input_size_per_partition,
+                # materialized just-in-time in `patched_weight_loader`
+                device="meta",
+                dtype=params_dtype,
+            ),
+            input_dim=1,
+            output_dim=0,
+            weight_loader=patched_weight_loader,
+        )
+        # stash the correct device for `patched_weight_loader`
+        layer._load_device = torch.get_default_device()
+        layer.register_parameter("weight", weight)
+
 
 class Int8LinearMethod(BaseInt8LinearMethod):
     """
@@ -288,13 +380,27 @@ class NPUInt8LinearMethod(BaseInt8LinearMethod):
         return output
 
 
-class Int8OnlineLinearMethod(Int8LinearMethod):
+class Int8OnlineLinearMethod(LazyWeightMixin, Int8LinearMethod):
     """
     Online version of Int8LinearMethod, loads the fp16/bf16 checkpoint
     and quantized the weights during loading.
     """
 
     def process_weights_after_loading(self, layer: Module) -> None:
+        if getattr(layer, "_already_called_process_weights_after_loading", False):
+            return
+        
+        if layer.weight.device == torch.device("meta"):
+            weight = ModelWeightParameter(
+                data=torch.empty_like(layer.weight, device=layer._load_device),
+                input_dim=1,
+                output_dim=0,
+                weight_loader=layer.weight.weight_loader,
+            )
+            _copy_missing_attrs(layer.weight, weight)
+            layer.register_parameter("weight", weight)
+            initialize_single_dummy_weight(layer.weight)
+
         w_q_name, w_s_name, i_s_name, i_zp_name, azp_adj_name = self.int8_linear.layer_param_names
         qweight, weight_scale, _ = ops.scaled_int8_quant(layer.weight, scale=None)
 
@@ -306,14 +412,31 @@ class Int8OnlineLinearMethod(Int8LinearMethod):
         setattr(layer, i_zp_name, None)
         setattr(layer, azp_adj_name, None)
 
+        # Prevent duplicate processing (e.g., during weight reload)
+        layer._already_called_process_weights_after_loading = True
 
-class NPUInt8OnlineLinearMethod(NPUInt8LinearMethod):
+
+class NPUInt8OnlineLinearMethod(LazyWeightMixin, NPUInt8LinearMethod):
     """
     NPU Online version of Int8LinearMethod, loads the fp16/bf16 checkpoint
     and quantized the weights during loading.
     """
 
     def process_weights_after_loading(self, layer: Module) -> None:
+        if getattr(layer, "_already_called_process_weights_after_loading", False):
+            return
+        
+        if layer.weight.device == torch.device("meta"):
+            weight = ModelWeightParameter(
+                data=torch.empty_like(layer.weight, device=layer._load_device),
+                input_dim=1,
+                output_dim=0,
+                weight_loader=layer.weight.weight_loader,
+            )
+            _copy_missing_attrs(layer.weight, weight)
+            layer.register_parameter("weight", weight)
+            initialize_single_dummy_weight(layer.weight)
+
         weight = layer.weight
         qweight, weight_scale = torch_npu.npu_dynamic_quant(weight)
 
@@ -322,6 +445,9 @@ class NPUInt8OnlineLinearMethod(NPUInt8LinearMethod):
         # Update layer with new values.
         replace_parameter(layer, "weight", qweight)
         replace_parameter(layer, "weight_scale", weight_scale)
+
+        # Prevent duplicate processing (e.g., during weight reload)
+        layer._already_called_process_weights_after_loading = True
 
 
 class DiffusionInt8Config(DiffusionQuantizationConfig):

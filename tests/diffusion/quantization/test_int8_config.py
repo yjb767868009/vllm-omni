@@ -14,6 +14,17 @@ from vllm_omni.diffusion.quantization import (
     get_diffusion_quant_config,
     get_vllm_quant_config_for_layers,
 )
+from vllm_omni.platforms import current_omni_platform
+
+npu_available = pytest.mark.skipif(
+    not current_omni_platform.is_npu(),
+    reason="NPU platform not available."
+)
+
+cuda_available = pytest.mark.skipif(
+    not current_omni_platform.is_npu(),
+    reason="GPU platform not available."
+)
 
 
 def test_int8_config_creation():
@@ -252,7 +263,7 @@ class TestInt8OnlineLinearMethod:
         method.process_weights_after_loading(layer)
         mock_deps["quant"].assert_called_once_with(layer.weight, scale=None)
 
-
+@npu_available
 class TestNPUInt8LinearMethod:
     qweight_mock = torch.randn((128, 64)).to(dtype=torch.int8)
     scale_mock = torch.randn(128)
@@ -309,3 +320,154 @@ class TestNPUInt8LinearMethod:
 
         assert mock_layer.weight.shape == (64, 128)
         assert torch.equal(mock_layer.weight_scale, self.scale_mock)
+
+@pytest.fixture
+def quant_config():
+    """Shared quant config fixture for smoke tests."""
+    from vllm_omni.diffusion.quantization.int8 import Int8Config
+
+    return Int8Config(
+        is_checkpoint_int8_serialized=False,
+        activation_scheme="dynamic",
+    )
+
+@npu_available
+class TestNPUInt8Smoke:
+    """Smoke tests using real torch_npu, only run on NPU."""
+
+    @pytest.fixture
+    def real_layer(self):
+        """Create a real linear layer with fp16 weights on NPU"""
+        layer = torch.nn.Module()
+        layer.weight = torch.nn.Parameter(
+            torch.randn(128, 64, dtype=torch.float16, device="npu"),
+            requires_grad=False,
+        )
+        layer.logical_widths = [128]
+        layer.input_size_per_partition = 64
+        layer.output_size_per_partition = 128
+        layer.orig_dtype = torch.float16
+        return layer
+
+    def test_real_npu_dynamic_quant_shape_contract(self, quant_config, real_layer):
+        """Smoke test: verify npu_dynamic_quant returns correct shapes."""
+        import torch_npu
+
+        from vllm_omni.diffusion.quantization.int8 import NPUInt8OnlineLinearMethod
+
+        method = NPUInt8OnlineLinearMethod(quant_config)
+
+        # Call real torch_npu.npu_dynamic_quant
+        weight = real_layer.weight
+        qweight, scale = torch_npu.npu_dynamic_quant(weight)
+
+        assert qweight.shape == weight.shape
+        assert qweight.dtype == torch.int8
+        assert scale.shape == (weight.shape[0],)
+
+    def test_real_npu_online_process_weights_after_loading(
+        self, quant_config, real_layer
+    ):
+        """Smoke test: full process_weights_after_loading with real torch_npu."""
+        from vllm_omni.diffusion.quantization.int8 import NPUInt8OnlineLinearMethod
+
+        method = NPUInt8OnlineLinearMethod(quant_config)
+
+        method.process_weights_after_loading(real_layer)
+
+        assert real_layer.weight.shape == (64, 128)
+        assert real_layer.weight.dtype == torch.int8
+        assert hasattr(real_layer, "weight_scale")
+        assert real_layer.weight_scale.shape == (128,)
+
+    def test_real_npu_int8_apply_forward(self, quant_config):
+        """Smoke test: forward pass with real npu_quant_matmul."""
+        import torch_npu
+
+        from vllm_omni.diffusion.quantization.int8 import NPUInt8LinearMethod
+
+        method = NPUInt8LinearMethod(quant_config)
+
+        # Create layer with pre-processed weights on NPU
+        layer = torch.nn.Module()
+        weight_fp16 = torch.randn(128, 64, dtype=torch.float16, device="npu")
+        qweight, scale = torch_npu.npu_dynamic_quant(weight_fp16)
+        layer.weight = torch.nn.Parameter(qweight.t().contiguous(), requires_grad=False)
+        layer.weight_scale = torch.nn.Parameter(scale.squeeze(), requires_grad=False)
+
+        # Forward pass on NPU
+        x = torch.randn(2, 16, 64, dtype=torch.float16, device="npu")
+        output = method.apply(layer, x)
+
+        assert output.shape == (2, 16, 128)
+        assert output.dtype == torch.float16
+
+
+@cuda_available
+class TestCudaInt8Smoke:
+    """Smoke tests using real CUDA kernels, only on CUDA"""
+
+    @pytest.fixture
+    def real_layer(self):
+        """Create a real linear layer with fp16 weights on CUDA"""
+        layer = torch.nn.Module()
+        layer.weight = torch.nn.Parameter(
+            torch.randn(128, 64, dtype=torch.float16, device="cuda"),
+            requires_grad=False,
+        )
+        layer.logical_widths = [128]
+        layer.input_size_per_partition = 64
+        layer.output_size_per_partition = 128
+        layer.orig_dtype = torch.float16
+        return layer
+
+    def test_real_cuda_scaled_int8_quant_shape_contract(self, quant_config):
+        """Smoke test: verify scaled_int8_quant returns correct shapes."""
+        from vllm import _custom_ops as ops
+
+        weight = torch.randn(128, 64, dtype=torch.float16, device="cuda")
+        qweight, scale, _ = ops.scaled_int8_quant(weight, scale=None)
+
+        assert qweight.shape == weight.shape
+        assert qweight.dtype == torch.int8
+        assert scale.shape == (weight.shape[0], 1)
+
+    def test_real_cuda_online_process_weights_after_loading(
+        self, quant_config, real_layer
+    ):
+        """Smoke test: full process_weights_after_loading with real CUDA ops."""
+        from vllm_omni.diffusion.quantization.int8 import Int8OnlineLinearMethod
+
+        method = Int8OnlineLinearMethod(quant_config)
+
+        method.process_weights_after_loading(real_layer)
+
+        assert real_layer.weight.shape == (64, 128)
+        assert real_layer.weight.dtype == torch.int8
+        assert hasattr(real_layer, "weight_scale")
+
+    def test_real_cuda_int8_apply_forward(self, quant_config):
+        """Smoke test: forward pass with real CUDA int8 kernel."""
+        from vllm import _custom_ops as ops
+        from vllm_omni.diffusion.quantization.int8 import Int8LinearMethod
+
+        method = Int8LinearMethod(quant_config)
+
+        # Create layer with pre-processed weights
+        layer = torch.nn.Module()
+        weight_fp16 = torch.randn(128, 64, dtype=torch.float16, device="cuda")
+        qweight, scale, _ = ops.scaled_int8_quant(weight_fp16, scale=None)
+        layer.weight = torch.nn.Parameter(qweight.t(), requires_grad=False)
+        layer.weight_scale = torch.nn.Parameter(scale, requires_grad=False)
+
+        # Set required attributes for kernel
+        layer.input_scale = None
+        layer.input_zero_point = None
+        layer.azp_adj = None
+
+        # Forward pass
+        x = torch.randn(2, 16, 64, dtype=torch.float16, device="cuda")
+        output = method.apply(layer, x)
+
+        assert output.shape == (2, 16, 128)
+        assert output.dtype == torch.float16
