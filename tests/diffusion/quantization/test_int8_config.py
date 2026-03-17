@@ -257,6 +257,7 @@ class TestInt8OnlineLinearMethod:
         method.process_weights_after_loading(layer)
         mock_deps["quant"].assert_called_once_with(layer.weight, scale=None)
 
+
 @npu_available
 class TestNPUInt8LinearMethod:
     qweight_mock = torch.randn((128, 64)).to(dtype=torch.int8)
