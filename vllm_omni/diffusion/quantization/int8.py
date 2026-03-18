@@ -9,6 +9,9 @@ import torch
 from torch.nn import Module
 from vllm import _custom_ops as ops
 from vllm.logger import init_logger
+from vllm.model_executor.kernels.linear import (
+    init_int8_linear_kernel,
+)
 from vllm.model_executor.layers.linear import (
     LinearBase,
     LinearMethodBase,
@@ -20,9 +23,6 @@ from vllm.model_executor.layers.quantization.base_config import (
     QuantizeMethodBase,
 )
 from vllm.model_executor.layers.quantization.fp8 import CopyNumelCounter, _copy_missing_attrs
-from vllm.model_executor.kernels.linear import (
-    init_int8_linear_kernel,
-)
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     is_layer_skipped,
 )
