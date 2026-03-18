@@ -20,7 +20,7 @@ from vllm.model_executor.layers.quantization.base_config import (
     QuantizeMethodBase,
 )
 from vllm.model_executor.layers.quantization.fp8 import CopyNumelCounter, _copy_missing_attrs
-from vllm.model_executor.layers.quantization.kernels.scaled_mm import (
+from vllm.model_executor.kernels.linear import (
     init_int8_linear_kernel,
 )
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
