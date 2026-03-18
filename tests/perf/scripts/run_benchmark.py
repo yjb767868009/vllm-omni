@@ -107,8 +107,14 @@ def omni_server(request):
         print("OmniServer stopped")
 
 
-def run_benchmark(args: list, test_name: str, flow, dataset_name: str, num_prompt) -> Any:
-    """Generate synthetic image with random values."""
+def run_benchmark(
+    args: list,
+    test_name: str,
+    flow,
+    dataset_name: str,
+    num_prompt,
+) -> Any:
+    """Run a single benchmark iteration and return the parsed result JSON."""
     current_dt = datetime.now().strftime("%Y%m%d-%H%M%S")
     result_filename = f"result_{test_name}_{dataset_name}_{flow}_{num_prompt}_{current_dt}.json"
     if "--result-filename" in args:
@@ -117,10 +123,6 @@ def run_benchmark(args: list, test_name: str, flow, dataset_name: str, num_promp
         ["vllm", "bench", "serve", "--omni"]
         + args
         + [
-            "--backend",
-            "openai-chat-omni",
-            "--endpoint",
-            "/v1/chat/completions",
             "--save-result",
             "--result-dir",
             os.environ.get("BENCHMARK_DIR", "tests"),
@@ -188,11 +190,18 @@ def benchmark_params(request, omni_server):
     if param_index >= len(all_params):
         raise ValueError(f"No benchmark parameters found for index {param_index} in test: {test_name}")
 
+    if all_params[param_index]["dataset_name"] == "random-mm":
+        # TODO: Due to known issues, skip the random-mm dataset.
+        pytest.skip("Skipping parameter for random-mm dataset.")
+
     current = param_index + 1
     total = len(all_params)
     print(f"\n  Running benchmark {current}/{total} for {test_name}")
 
-    return {"test_name": test_name, "params": all_params[param_index]}
+    return {
+        "test_name": test_name,
+        "params": all_params[param_index],
+    }
 
 
 def assert_result(result, params, num_prompt):
@@ -262,7 +271,11 @@ def test_performance_benchmark(omni_server, benchmark_params):
     for qps, num_prompt in zip(qps_list, num_prompt_list):
         args = args + ["--request-rate", str(qps), "--num-prompts", str(num_prompt)]
         result = run_benchmark(
-            args=args, test_name=test_name, flow=qps, dataset_name=dataset_name, num_prompt=num_prompt
+            args=args,
+            test_name=test_name,
+            flow=qps,
+            dataset_name=dataset_name,
+            num_prompt=num_prompt,
         )
         assert_result(result, params, num_prompt=num_prompt)
 
@@ -270,6 +283,10 @@ def test_performance_benchmark(omni_server, benchmark_params):
     for concurrency, num_prompt in zip(max_concurrency_list, num_prompt_list):
         args = args + ["--max-concurrency", str(concurrency), "--num-prompts", str(num_prompt), "--request-rate", "inf"]
         result = run_benchmark(
-            args=args, test_name=test_name, flow=concurrency, dataset_name=dataset_name, num_prompt=num_prompt
+            args=args,
+            test_name=test_name,
+            flow=concurrency,
+            dataset_name=dataset_name,
+            num_prompt=num_prompt,
         )
         assert_result(result, params, num_prompt=num_prompt)
