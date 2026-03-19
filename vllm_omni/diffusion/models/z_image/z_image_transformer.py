@@ -414,10 +414,7 @@ class ZImageTransformerBlock(nn.Module):
         )
 
         self.feed_forward = FeedForward(
-            dim=dim,
-            hidden_dim=int(dim / 3 * 8),
-            quant_config=quant_config,
-            prefix="feed_forward"
+            dim=dim, hidden_dim=int(dim / 3 * 8), quant_config=quant_config, prefix="feed_forward"
         )
         self.layer_id = layer_id
 
